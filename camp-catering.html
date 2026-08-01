@@ -113,6 +113,10 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
   .subrow{display:flex;gap:4px;align-items:center;margin-top:3px}
   .subrow input{flex:1;font-size:12px;padding:3px}
   .sublab{font-size:10px;color:var(--amber);font-weight:700;white-space:nowrap;background:var(--calc);border:1px solid var(--amberbd);border-radius:5px;padding:1px 5px}
+  .mcell.armed{outline:2px solid var(--band);outline-offset:-2px;background:var(--calc)}
+  .parkbar{margin-top:10px;padding:8px 10px;border:1px dashed var(--band);border-radius:8px;background:var(--rowalt);display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12.5px}
+  .parkmsg,.parklabel{font-weight:700;color:var(--spkd)}
+  .parkchip{display:inline-flex;gap:4px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:20px;padding:2px 6px 2px 10px}
   .rmx{border:1px solid var(--redbd);background:var(--redbg);color:var(--red);border-radius:5px;cursor:pointer;font-size:10px;padding:1px 5px;margin-left:6px}
   /* Ποσοτολόγιο — ομάδες ανά γεύμα */
   .mealgroup{border:1px solid var(--line);border-radius:10px;margin:12px 0;padding:4px 10px 10px;background:var(--rowalt)}
@@ -233,7 +237,7 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
       materials: { general: { egkatastasis: [], mageiriou: [], asfaleias: [], analosima: [], alla: [] }, presets: [] },
       budget: { dikaiomaSymmetoxis: 0, esoda: [], exoda: [] },
       route: [],
-      catering: { diaitologio: {}, posotologio: [] },
+      catering: { diaitologio: {}, posotologio: [], doseis: [], parked: [] },
       appendices: []
     };
   }
@@ -1459,6 +1463,7 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
     if(!phase.catering.diaitologio) phase.catering.diaitologio={};
     if(!phase.catering.posotologio) phase.catering.posotologio=[];
     if(!phase.catering.doseis) phase.catering.doseis=[];
+    if(!phase.catering.parked) phase.catering.parked=[];
     C.migrateDiaitologio(phase);
     C.migratePosotologio(phase);
     phase.catering.posotologio.forEach(function(l){ if(!l.id) l.id=C.uid(); });
@@ -1523,7 +1528,8 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
         (isExtra?"<button class=rmx data-rmmeal=\""+esc(m.key)+"\" title=\"Αφαίρεση σειράς\">✕</button>":"")+"</th>";
       var cells=days.map(function(dd){
         var s=C.slot(phase,dd,m.key)||{text:"",off:false,merged:false};
-        var cls="mcell"+(s.off?" off":"")+(s.merged?" merged":"");
+        var ck=dd+"|"+m.key;
+        var cls="mcell"+(s.off?" off":"")+(s.merged?" merged":"")+(pendingSwap===ck?" armed":"");
         var inner, subsHTML="", addSub="";
         if(s.off) inner="<div class=slotmuted>— ακυρώθηκε —</div>";
         else if(s.merged) inner="<div class=slotmuted>⌐ ενιαίο serve με το πάνω</div>";
@@ -1537,17 +1543,35 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
           }).join("");
           addSub="<button class=slotbtn data-addsub=\""+dd+"|"+m.key+"\" title=\"Υποκατηγορία σε ΑΥΤΟ το γεύμα (επιδόρπιο/ρόφημα…)\">＋υποκ.</button>";
         }
+        var swapPark=(!s.off&&!s.merged)?(
+          "<button class=slotbtn data-swap=\""+ck+"\" title=\"Ανταλλαγή με άλλο γεύμα\">⇄</button>"+
+          "<button class=slotbtn data-park=\""+ck+"\" title=\"Στείλε στο Πάρκο (προσωρινά)\">✂</button>"):"";
+        var placeBtn=(pendingPlace&&!s.merged)?"<button class=\"slotbtn feed\" data-place=\""+ck+"\" title=\"Τοποθέτησε εδώ το παρκαρισμένο\">📥 εδώ</button>":"";
         var ctr="<div class=slotctr>"+
           "<button class=slotbtn data-off=\""+dd+"|"+m.key+"\" title=\"Ακύρωση/επαναφορά γεύματος\">"+(s.off?"↺":"✕")+"</button>"+
           (mi>0?"<button class=slotbtn data-merge=\""+dd+"|"+m.key+"\" title=\"Ένωση με το πάνω γεύμα\">"+(s.merged?"⛓✓":"⛓")+"</button>":"")+
           (!s.off?"<button class=\"slotbtn feed\" data-feed=\""+dd+"|"+m.key+"\" title=\"Πρόσθεσε στο ποσοτολόγιο\">→🍲</button>":"")+
-          addSub+
+          swapPark+placeBtn+addSub+
         "</div>";
         return "<td class=\""+cls+"\">"+inner+subsHTML+ctr+"</td>";
       }).join("");
       return "<tr>"+rowh+cells+"</tr>";
     }).join("");
-    $("#diet").innerHTML="<table class=diet>"+head+body+"</table>";
+    $("#diet").innerHTML="<table class=diet>"+head+body+"</table>"+parkBar();
+  }
+  function parkBar(){
+    var bits=[];
+    if(pendingSwap) bits.push("<span class=parkmsg>⇄ Διάλεξε 2ο γεύμα για ανταλλαγή (ξανά ⇄ στο ίδιο = ακύρωση)</span>");
+    if(pendingPlace) bits.push("<span class=parkmsg>📥 Διάλεξε κελί «εδώ» για τοποθέτηση</span>");
+    var pk=phase.catering.parked||[];
+    if(pk.length){
+      bits.push("<span class=parklabel>🅿 Πάρκο:</span>"+pk.map(function(e){
+        return "<span class=parkchip>"+esc((e.label||"γεύμα")+(e.text?": "+e.text:""))+(e.items&&e.items.length?" ("+e.items.length+" είδη)":"")+
+          " <button class=slotbtn data-placearm=\""+e.id+"\" title=\"Τοποθέτησε σε κελί\">📥</button>"+
+          "<button class=slotbtn data-parkdel=\""+e.id+"\" title=\"Διαγραφή από πάρκο\">✕</button></span>";
+      }).join(""));
+    }
+    return bits.length?"<div class=parkbar>"+bits.join(" ")+"</div>":"";
   }
 
   function selOpts(list,sel,useKey){
@@ -1736,6 +1760,20 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
   document.addEventListener("click",function(e){
     var t=e.target;
     if(t.closest&&t.closest(".tab")){ switchTab(t.closest(".tab").getAttribute("data-tab")); return; }
+    var swb=t.closest&&t.closest("[data-swap]");
+    if(swb){ var sk=swb.getAttribute("data-swap");
+      if(!pendingSwap){ pendingSwap=sk; renderDiet(); }
+      else if(pendingSwap===sk){ pendingSwap=null; renderDiet(); }
+      else { var a=pendingSwap; pendingSwap=null; doSwap(a,sk); }
+      return; }
+    var pkb=t.closest&&t.closest("[data-park]");
+    if(pkb){ var pp=pkb.getAttribute("data-park").split("|"); doPark(pp[0],pp[1]); return; }
+    var plb=t.closest&&t.closest("[data-place]");
+    if(plb){ var pl=plb.getAttribute("data-place").split("|"); var pid=pendingPlace; pendingPlace=null; doPlace(pid,pl[0],pl[1]); return; }
+    var paa=t.closest&&t.closest("[data-placearm]");
+    if(paa){ pendingPlace=paa.getAttribute("data-placearm"); pendingSwap=null; renderDiet(); return; }
+    var pdl=t.closest&&t.closest("[data-parkdel]");
+    if(pdl){ var did=pdl.getAttribute("data-parkdel"); phase.catering.parked=(phase.catering.parked||[]).filter(function(x){return x.id!==did;}); renderDiet(); autosave(); return; }
     var offb=t.closest&&t.closest("[data-off]");
     if(offb){ var po=offb.getAttribute("data-off").split("|"); var so=C.slot(phase,po[0],po[1])||{}; C.setSlot(phase,po[0],po[1],{off:!so.off,merged:false}); renderAll(); return; }
     var mgb=t.closest&&t.closest("[data-merge]");
@@ -1776,6 +1814,41 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
       .catch(function(){ flash("Η αντιγραφή απέτυχε"); });
   }
 
+  /* ---------- Ανταλλαγή / Πάρκο (προσωρινό hold) — για συχνές αλλαγές γευμάτων ---------- */
+  var pendingSwap=null, pendingPlace=null;
+  function linkedItems(day,key){ return phase.catering.posotologio.filter(function(l){return l.mealDate===day&&l.mealKey===key;}); }
+  function doSwap(aStr,bStr){
+    var a=aStr.split("|"), b=bStr.split("|");
+    var sa=C.setSlot(phase,a[0],a[1],{}), sb=C.setSlot(phase,b[0],b[1],{});
+    var tmp={text:sa.text,off:sa.off,merged:sa.merged,subs:sa.subs};
+    sa.text=sb.text; sa.off=sb.off; sa.merged=sb.merged; sa.subs=sb.subs;
+    sb.text=tmp.text; sb.off=tmp.off; sb.merged=tmp.merged; sb.subs=tmp.subs;
+    var ia=linkedItems(a[0],a[1]), ib=linkedItems(b[0],b[1]);
+    if((ia.length||ib.length) && confirm("Να μεταφερθούν και τα δεμένα είδη ποσοτολογίου μαζί; ("+ia.length+" ↔ "+ib.length+")")){
+      ia.forEach(function(l){l.mealDate=b[0]; l.mealKey=b[1];});
+      ib.forEach(function(l){l.mealDate=a[0]; l.mealKey=a[1];});
+    }
+    renderAll(); flash("Ανταλλαγή γευμάτων ✓");
+  }
+  function doPark(day,key){
+    if(!phase.catering.parked) phase.catering.parked=[];
+    var s=C.setSlot(phase,day,key,{}); var m=C.meals(phase).filter(function(x){return x.key===key;})[0];
+    var entry={id:C.uid(), key:key, label:(m?m.label:key), text:s.text||"", subs:(s.subs||[]).slice(), items:[]};
+    var items=linkedItems(day,key);
+    if(items.length && confirm("Να πάρω μαζί στο Πάρκο και τα "+items.length+" είδη ποσοτολογίου αυτού του γεύματος;")){
+      entry.items=items.slice();
+      phase.catering.posotologio=phase.catering.posotologio.filter(function(l){return items.indexOf(l)<0;});
+    }
+    C.setSlot(phase,day,key,{text:"",subs:[],off:false,merged:false});
+    phase.catering.parked.push(entry); renderAll(); flash("Στο Πάρκο ✓");
+  }
+  function doPlace(parkId,day,key){
+    var e=(phase.catering.parked||[]).filter(function(x){return x.id===parkId;})[0]; if(!e)return;
+    C.setSlot(phase,day,key,{text:e.text||"", subs:(e.subs||[]).slice(), off:false, merged:false});
+    (e.items||[]).forEach(function(l){ l.mealDate=day; l.mealKey=key; phase.catering.posotologio.push(l); });
+    phase.catering.parked=phase.catering.parked.filter(function(x){return x.id!==parkId;});
+    renderAll(); flash("Τοποθετήθηκε ✓");
+  }
   function findSub(day,key,sid){ var s=C.slot(phase,day,key); if(!s||!s.subs)return null; return s.subs.filter(function(x){return x.id===sid;})[0]; }
   function feedMeal(day,key,eidos){
     var l=C.blankLine({mealDate:day,mealKey:key,meridesAuto:true,eidos:eidos||""});
