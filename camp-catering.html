@@ -150,6 +150,7 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
     <div class="tab on" data-tab="diet">Διαιτολόγιο</div>
     <div class="tab" data-tab="poso">Ποσοτολόγιο</div>
     <div class="tab" data-tab="agora">Λίστα Αγορών</div>
+    <div class="tab" data-tab="agores">🛒 Αγορές</div>
     <div class="tab" data-tab="kostos">Κόστος</div>
   </div>
 
@@ -196,6 +197,17 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
       <button class="btn small" id="copyAll">📋 Αντιγραφή όλων</button>
     </div>
     <div id="agora"></div>
+  </section>
+
+  <!-- ΑΓΟΡΕΣ (check-in) -->
+  <section id="tab-agores" class="card hide">
+    <div class="row" style="justify-content:space-between;align-items:flex-end">
+      <div><label class="fld">Σήμερα αγοράζω από</label>
+        <select id="storePick" style="min-width:220px"></select></div>
+      <span class="chip" id="storeTot">—</span>
+    </div>
+    <div id="agores" style="margin-top:10px"></div>
+    <div class="hint" style="margin-top:8px">✓ πάρθηκε · γράψε πραγματική ποσότητα + τιμή (πιάνει άλλο μέγεθος συσκευασίας) · ✕ δεν πάρθηκε · ＋ έξτρα. Η τιμή ενημερώνει τον τιμοκατάλογο.</div>
   </section>
 
   <!-- ΚΟΣΤΟΣ -->
@@ -1168,9 +1180,34 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
       posotita: num(o.posotita), baseQty: num(o.baseQty), baseServes: num(o.baseServes) || 1,
       monada: o.monada || "κιλ.", timiMonadas: num(o.timiMonadas),
       supplier: o.supplier || "",
+      sell: o.sell || "loose", packSize: num(o.packSize), packPrice: num(o.packPrice), packLabel: o.packLabel || "",
+      bought: !!o.bought, skipped: !!o.skipped, actualQty: num(o.actualQty), actualPrice: num(o.actualPrice), extra: !!o.extra,
       paid: !!o.paid, actual: num(o.actual),
       dosi: o.dosi || "—", dosiDate: o.dosiDate || "", note: o.note || ""
     };
+  }
+
+  /* ---------- Αγορές: συσκευασία (ζυγιστό ↔ πακέτα) + πραγματικά ----------
+     baseNeed = ποσότητα σε βασική μονάδα (κιλ./τεμ.). pack: πόσες συσκευασίες = ceil(need/περιεχόμενο). */
+  function buyPlan(phase, line) {
+    var baseNeed = lineQuantity(phase, line);
+    if ((line.sell || "loose") === "pack" && num(line.packSize) > 0) {
+      var packs = Math.ceil(baseNeed / num(line.packSize) - 1e-9);
+      if (packs < 1 && baseNeed > 0) packs = 1;
+      return { baseNeed: round3(baseNeed), sell: "pack", packs: packs, unit: "συσκ.",
+               label: line.packLabel || "συσκ.", perPack: num(line.packPrice),
+               planCost: round2(packs * num(line.packPrice)), actualBase: round3(packs * num(line.packSize)) };
+    }
+    return { baseNeed: round3(baseNeed), sell: "loose", packs: null, unit: line.monada || "",
+             label: line.monada || "", perUnit: num(line.timiMonadas), planCost: round2(baseNeed * num(line.timiMonadas)) };
+  }
+  function itemBought(line) { return (!!line.bought || !!line.paid) && !line.skipped; }
+  /* Πραγματικό κόστος αγοράς: skipped→0· actualQty×actualPrice αν δόθηκαν· παλιό actual· αλλιώς εκτίμηση (buyPlan). */
+  function itemActual(phase, line) {
+    if (line.skipped) return 0;
+    if (num(line.actualQty) > 0 && num(line.actualPrice) > 0) return round2(num(line.actualQty) * num(line.actualPrice));
+    if (num(line.actual) > 0) return round2(num(line.actual));
+    return buyPlan(phase, line).planCost;
   }
 
   /* ---------- Budget ανά κατάστημα/προμηθευτή + παρακολούθηση πληρωμών (ΟΠ) ----------
@@ -1181,11 +1218,11 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
     t.byLine.forEach(function (x) {
       var s = x.line.supplier || "—";
       if (!map[s]) { map[s] = { store: s, items: [], estimate: 0, paid: 0, remaining: 0 }; order.push(s); }
-      var g = map[s], est = x.cost, isP = !!x.line.paid, act = num(x.line.actual) || est;
-      g.items.push({ line: x.line, quantity: x.quantity, est: est, isPaid: isP, actual: isP ? act : 0 });
+      var g = map[s], est = x.cost, bp = buyPlan(phase, x.line), isP = itemBought(x.line), act = itemActual(phase, x.line);
+      g.items.push({ line: x.line, quantity: x.quantity, est: est, buy: bp, isPaid: isP, actual: isP ? act : 0, skipped: !!x.line.skipped });
       g.estimate = round2(g.estimate + est);
       g.paid = round2(g.paid + (isP ? act : 0));
-      g.remaining = round2(g.remaining + (isP ? 0 : est));
+      g.remaining = round2(g.remaining + (isP || x.line.skipped ? 0 : est));
     });
     return order.map(function (s) { return map[s]; });
   }
@@ -1309,6 +1346,7 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
     headcountOn: headcountOn, isHeadcountManual: isHeadcountManual,
     byDate: byDate, bySupplier: bySupplier, posotologioMatrix: posotologioMatrix, matrixRows: matrixRows,
     storeGroups: storeGroups, payTotals: payTotals, budgetRows: budgetRows,
+    buyPlan: buyPlan, itemActual: itemActual, itemBought: itemBought,
     lineMerides: lineMerides, lineQuantity: lineQuantity, lineCost: lineCost, lineFormula: lineFormula,
     dosiOrder: dosiOrder, totals: totals, shoppingRows: shoppingRows,
     migratePosotologio: migratePosotologio, blankLine: blankLine, uid: uid
@@ -1316,6 +1354,52 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
   global.CampCatering = API;
   if (typeof module !== "undefined" && module.exports) module.exports = API;
 })(typeof window !== "undefined" ? window : this);
+
+</script>
+<script>
+/* price-catalog-seed.js — αρχική βάση τιμοκαταλόγου από ΟΠ 2025 (198 είδη). → window.CampPriceSeed */
+window.CampPriceSeed=[{"e": "Baking Powder", "m": "τεμ.", "t": 1.32, "s": "MINTIKKIS"}, {"e": "Burger", "m": "τεμ.", "t": 1.5, "s": "MINTIKKIS"}, {"e": "CIF", "m": "τεμ.", "t": 2.6, "s": "MINTIKKIS"}, {"e": "Chia Seeds", "m": "τεμ.", "t": 1.5, "s": "MINTIKKIS"}, {"e": "Clean Film", "m": "τεμ.", "t": 8.35, "s": "MINTIKKIS"}, {"e": "Corn Flour", "m": "τεμ.", "t": 2.05, "s": "MINTIKKIS"}, {"e": "Custard Powder", "m": "τεμ.", "t": 1.75, "s": "MINTIKKIS"}, {"e": "Drinking Chocolate", "m": "τεμ.", "t": 4.5, "s": "MINTIKKIS"}, {"e": "Fajita Seasoning 35 γρ El SALVADOR", "m": "τεμ.", "t": 1.28, "s": "ΣΚΛΑΒΕΝΙΤ"}, {"e": "Fajita Seasoning 35 γρ Old El Paso", "m": "κιλ.", "t": 1.25, "s": "ΣΚΛΑΒΕΝΙΤ"}, {"e": "Frozen mixed veggies", "m": "κιλ.", "t": 1.45, "s": "MINTIKKIS"}, {"e": "Grated Cheese", "m": "κιλ.", "t": 6.85, "s": "MINTIKKIS"}, {"e": "Guacamole", "m": "τεμ.", "t": 6.0, "s": "MINTIKKIS"}, {"e": "Guacamole Mix", "m": "τεμ.", "t": 2.0, "s": "MINTIKKIS"}, {"e": "Honey Mustard", "m": "τεμ.", "t": 25.0, "s": "MINTIKKIS"}, {"e": "Hot Dog", "m": "τεμ.", "t": 3.75, "s": "MINTIKKIS"}, {"e": "Illy Καψούλες καφέ (10δα)", "m": "τεμ.", "t": 4.0, "s": "MINTIKKIS"}, {"e": "Jelly", "m": "τεμ.", "t": 1.2, "s": "MINTIKKIS"}, {"e": "Maggie Ζωμός", "m": "τεμ.", "t": 2.15, "s": "LIDL"}, {"e": "Maggie Νοστημιά", "m": "τεμ.", "t": 3.25, "s": "LIDL"}, {"e": "Maggie νοστιμιά", "m": "τεμ.", "t": 2.55, "s": "MINTIKKIS"}, {"e": "Mashed Potatoes Σκονη (8μεριδες)", "m": "τεμ.", "t": 2.2, "s": "MINTIKKIS"}, {"e": "Microfiber Clothes", "m": "τεμ.", "t": 1.5, "s": "MINTIKKIS"}, {"e": "Mozzarella Grated", "m": "κιλ.", "t": 7.45, "s": "MINTIKKIS"}, {"e": "Oats Quacker 500γρ", "m": "τεμ.", "t": 1.95, "s": "MINTIKKIS"}, {"e": "Pick up σοκολάτες 24δα", "m": "τεμ.", "t": 14.95, "s": "MINTIKKIS"}, {"e": "Polareti", "m": "τεμ.", "t": 1.75, "s": "MINTIKKIS"}, {"e": "Pork shoulder για  pulled pork", "m": "κιλ.", "t": 5.5, "s": "MINTIKKIS"}, {"e": "Pork shoulder για Ρόστο", "m": "κιλ.", "t": 5.5, "s": "MINTIKKIS"}, {"e": "Terriyaki Sauce", "m": "τεμ.", "t": 4.76, "s": "ΣΚΛΑΒΕΝΙΤ"}, {"e": "Αγγουράκια (4kg)", "m": "τεμ.", "t": 3.15, "s": "ALION"}, {"e": "Αγγούρι", "m": "τεμ.", "t": 15.0, "s": "ALION"}, {"e": "Αλάτι Μαγειρικό", "m": "τεμ.", "t": 0.5, "s": "MINTIKKIS"}, {"e": "Αλάτι Μαγειρικό χοντρό", "m": "τεμ.", "t": 0.5, "s": "MINTIKKIS"}, {"e": "Αλάτι μπλε μεγάλο", "m": "τεμ.", "t": 0.7, "s": "MINTIKKIS"}, {"e": "Αλεύρι Φαρίνα 00 - Μιτσίδης", "m": "κιλ.", "t": 1.5, "s": "MINTIKKIS"}, {"e": "Αλεύρι Χωριατικο - Μιτσίδης", "m": "κιλ.", "t": 1.5, "s": "MINTIKKIS"}, {"e": "Αλεύρι για όλες τις χρήσεις - Εμμέλεια", "m": "κιλ.", "t": 1.5, "s": "MINTIKKIS"}, {"e": "Ανθόνερο", "m": "τεμ.", "t": 0.7, "s": "MINTIKKIS"}, {"e": "Ασυμόκολλα", "m": "τεμ.", "t": 1.35, "s": "MINTIKKIS"}, {"e": "Αυγά", "m": "τεμ.", "t": 8.0, "s": "MINTIKKIS"}, {"e": "Βανίλλα έξτρακτ (150μλ συνολο)", "m": "τεμ.", "t": 0.85, "s": "MINTIKKIS"}, {"e": "Βανιλλίνη", "m": "τεμ.", "t": 0.85, "s": "MINTIKKIS"}, {"e": "Βαφλάκια", "m": "τεμ.", "t": 2.0, "s": "MINTIKKIS"}, {"e": "Βούτηρο - Μαργαρίνη", "m": "τεμ.", "t": 2.3, "s": "MINTIKKIS"}, {"e": "Βούτυρο Μαγειρικό", "m": "τεμ.", "t": 3.0, "s": "MINTIKKIS"}, {"e": "Βούτυρο Μαγειρικό Ανάλατο", "m": "τεμ.", "t": 3.45, "s": "LIDL"}, {"e": "Γάλα  Delact 2L", "m": "τεμ.", "t": 3.25, "s": "ΣΚΛΑΒΕΝΙΤ"}, {"e": "Γάλα Ζαχαρούχο (400γρ)", "m": "τεμ.", "t": 1.45, "s": "MINTIKKIS"}, {"e": "Γάλα μακράς διαρκείας", "m": "λίτ.", "t": 2.5, "s": "MINTIKKIS"}, {"e": "Γάντια Μίας Χρήσης", "m": "τεμ.", "t": 5.0, "s": "MINTIKKIS"}, {"e": "Γάντια Νεορχύτη", "m": "τεμ.", "t": 1.0, "s": "MINTIKKIS"}, {"e": "Γαλοπούλα βραστή", "m": "τεμ.", "t": 4.5, "s": "MINTIKKIS"}, {"e": "Γιαούρτι", "m": "τεμ.", "t": 12.0, "s": "MINTIKKIS"}, {"e": "Γκοφρέτες", "m": "τεμ.", "t": 2.4, "s": "MINTIKKIS"}, {"e": "Δημητριακά Bran", "m": "κιλ.", "t": 2.55, "s": "MINTIKKIS"}, {"e": "Δημητριακά Choa Crunch", "m": "κιλ.", "t": 4.3, "s": "MINTIKKIS"}, {"e": "Δημητριακά Choco Balls", "m": "κιλ.", "t": 2.7, "s": "MINTIKKIS"}, {"e": "Δημητριακά Choco Shells", "m": "κιλ.", "t": 2.7, "s": "MINTIKKIS"}, {"e": "Ελαιόλαδο", "m": "λίτ.", "t": 28.95, "s": "MINTIKKIS"}, {"e": "Ελαιόλαδο - SALAD", "m": "λίτ.", "t": 10.45, "s": "MINTIKKIS"}, {"e": "Ζάχαρη", "m": "κιλ.", "t": 1.0, "s": "MINTIKKIS"}, {"e": "Ζωμός Κότας - 12αδα", "m": "τεμ.", "t": 2.5, "s": "MINTIKKIS"}, {"e": "Ζωμός Λαχανικών - 12αδα", "m": "τεμ.", "t": 2.85, "s": "MINTIKKIS"}, {"e": "Ηλιαίλεο 3L", "m": "τεμ.", "t": 4.95, "s": "MINTIKKIS"}, {"e": "Θαλασινό Αλάτι", "m": "κιλ.", "t": 0.49, "s": "LIDL"}, {"e": "Θαλασινό Αλάτι Χοντρό", "m": "κιλ.", "t": 0.49, "s": "LIDL"}, {"e": "Κάρβουνα", "m": "τεμ.", "t": 5.0, "s": "MINTIKKIS"}, {"e": "Κέτσαπ Μεγάλο Τάγκι", "m": "τεμ.", "t": 6.0, "s": "MINTIKKIS"}, {"e": "Καλαμπόκι κονσέρβα - μεγάλες", "m": "τεμ.", "t": 0.83, "s": "MINTIKKIS"}, {"e": "Καπήρα", "m": "κιλ.", "t": 1.5, "s": "MINTIKKIS"}, {"e": "Καρπούζια 12-13kg", "m": "τεμ.", "t": 13.5, "s": "ALION"}, {"e": "Καρρότα (4kg)", "m": "τεμ.", "t": 4.95, "s": "ALION"}, {"e": "Καρότο Τριμμένο", "m": "τεμ.", "t": 1.81, "s": "ALION"}, {"e": "Καρύδια", "m": "κιλ.", "t": 5.0, "s": "MINTIKKIS"}, {"e": "Κεικ - LIDL vanilla", "m": "τεμ.", "t": 2.0, "s": "MINTIKKIS"}, {"e": "Κεικ - LIDL γεωγραφία", "m": "τεμ.", "t": 2.0, "s": "MINTIKKIS"}, {"e": "Κολοκυθάκι για λουβι - παλκάπα", "m": "τεμ.", "t": 0.5, "s": "MINTIKKIS"}, {"e": "Κουμανταρία", "m": "τεμ.", "t": 9.0, "s": "MINTIKKIS"}, {"e": "Κουτί Bisto για χοιρινό", "m": "τεμ.", "t": 2.9, "s": "MINTIKKIS"}, {"e": "Κρέμα Γάλακτος", "m": "λίτ.", "t": 4.0, "s": "MINTIKKIS"}, {"e": "Κραμπί", "m": "τεμ.", "t": 1.0, "s": "ALION"}, {"e": "Κραμπί Κόκκινο", "m": "τεμ.", "t": 1.45, "s": "ALION"}, {"e": "Κρασί Άσπρο", "m": "λίτ.", "t": 2.1, "s": "ΣΚΛΑΒΕΝΙΤ"}, {"e": "Κρασί Κόκκινο", "m": "λίτ.", "t": 2.0, "s": "MINTIKKIS"}, {"e": "Κρασί Λευκό", "m": "λίτ.", "t": 2.0, "s": "MINTIKKIS"}, {"e": "Κρεμμύδι", "m": "κιλ.", "t": 1.6, "s": "MINTIKKIS"}, {"e": "Κρεμμύδι φρέσκο", "m": "τεμ.", "t": 0.47, "s": "ALION"}, {"e": "Κρεμμύδια (4kg)", "m": "τεμ.", "t": 3.2, "s": "ALION"}, {"e": "Κρουασάν ατομικά", "m": "τεμ.", "t": 2.0, "s": "MINTIKKIS"}, {"e": "Λαδόκολλα", "m": "τεμ.", "t": 1.1, "s": "MINTIKKIS"}, {"e": "Λεμονάδα", "m": "τεμ.", "t": 2.1, "s": "MINTIKKIS"}, {"e": "Λεμόνια (3kg)", "m": "τεμ.", "t": 8.0, "s": "ALION"}, {"e": "Λουβί Φρέσκο Καθαρισμένο (500γρ)", "m": "τεμ.", "t": 9.49, "s": "ALION"}, {"e": "Μέλι", "m": "τεμ.", "t": 4.75, "s": "MINTIKKIS"}, {"e": "Μήλα Πορείας +", "m": "τεμ.", "t": 0.5, "s": "ALION"}, {"e": "Μαγειρική Σόδα", "m": "τεμ.", "t": 0.95, "s": "MINTIKKIS"}, {"e": "Μαγιονέζα", "m": "τεμ.", "t": 1.99, "s": "MINTIKKIS"}, {"e": "Μαγιονέζα - σίκλα μεγάλη", "m": "τεμ.", "t": 14.8, "s": "MINTIKKIS"}, {"e": "Μαιντανός", "m": "τεμ.", "t": 1.0, "s": "ALION"}, {"e": "Μακαρόνια Πέννες", "m": "κιλ.", "t": 1.8, "s": "MINTIKKIS"}, {"e": "Μακαρόνια καραόλους", "m": "κιλ.", "t": 1.5, "s": "MINTIKKIS"}, {"e": "Μαρμελάδες Lidl", "m": "τεμ.", "t": 3.5, "s": "MINTIKKIS"}, {"e": "Μαστίχα Αλεσμένη", "m": "τεμ.", "t": 1.5, "s": "MINTIKKIS"}, {"e": "Μαυροσάκουλλα", "m": "τεμ.", "t": 4.0, "s": "ΠΑΠΑΦΙΛΙΠΠΟΥ"}, {"e": "Μηρός  boneless", "m": "κιλ.", "t": 4.3, "s": "MINTIKKIS"}, {"e": "Μιτσίδης Αλεύρι Φαρίνα 00", "m": "κιλ.", "t": 1.45, "s": "LIDL"}, {"e": "Μπάρες ( Πορεία)", "m": "τεμ.", "t": 0.2, "s": "MINTIKKIS"}, {"e": "Μπανάνες", "m": "τεμ.", "t": 0.4, "s": "ALION"}, {"e": "Μπαχαρικά - Πάπρικα Γλυκιά", "m": "τεμ.", "t": 2.8, "s": "MINTIKKIS"}, {"e": "Μπαχαρικά - Πάπρικα Καπνιστή", "m": "τεμ.", "t": 2.95, "s": "MINTIKKIS"}, {"e": "Μπισκότα", "m": "τεμ.", "t": 1.45, "s": "MINTIKKIS"}, {"e": "Μπισκότα Digestive", "m": "τεμ.", "t": 2.4, "s": "MINTIKKIS"}, {"e": "Νescafe", "m": "τεμ.", "t": 6.25, "s": "MINTIKKIS"}, {"e": "Νεκταρίνια (500γρ)", "m": "τεμ.", "t": 2.7, "s": "ALION"}, {"e": "Νισιαστό", "m": "κιλ.", "t": 1.9, "s": "MINTIKKIS"}, {"e": "Νουτέλλα Μεγάλη", "m": "τεμ.", "t": 4.7, "s": "MINTIKKIS"}, {"e": "Ντομάτα", "m": "τεμ.", "t": 20.0, "s": "ALION"}, {"e": "Ντομάτα Passata", "m": "τεμ.", "t": 1.65, "s": "MINTIKKIS"}, {"e": "Ντομάτα κονσέρβα ψιλοκομμένο 400γρ", "m": "τεμ.", "t": 0.75, "s": "MINTIKKIS"}, {"e": "Ντομάτες 4kg", "m": "τεμ.", "t": 12.35, "s": "ALION"}, {"e": "Ντοματοχυμός Χ3", "m": "τεμ.", "t": 1.15, "s": "MINTIKKIS"}, {"e": "Ξύδι Άσπρο", "m": "λίτ.", "t": 3.0, "s": "MINTIKKIS"}, {"e": "Ξύδι Κόκκινο", "m": "λίτ.", "t": 3.0, "s": "MINTIKKIS"}, {"e": "ΠΑΓΩΤΟ ΜΕΓΑΛΟ", "m": "τεμ.", "t": 29.0, "s": "ΠΑΠΑΦΙΛΙΠΠΟΥ"}, {"e": "Πάστα Ντομάτας Χ3", "m": "τεμ.", "t": 1.1, "s": "MINTIKKIS"}, {"e": "Πίτες τορτίγιας", "m": "τεμ.", "t": 3.0, "s": "MINTIKKIS"}, {"e": "Πίττες Κυπριακές", "m": "τεμ.", "t": 2.5, "s": "MINTIKKIS"}, {"e": "Πατάτες Φρέσκιες", "m": "κιλ.", "t": 5.7, "s": "ALION"}, {"e": "Πεπόνι 2kg", "m": "τεμ.", "t": 3.45, "s": "ALION"}, {"e": "Πετσιά", "m": "τεμ.", "t": 1.4, "s": "MINTIKKIS"}, {"e": "Πετσιά Spongecloth", "m": "τεμ.", "t": 2.9, "s": "MINTIKKIS"}, {"e": "Πιάτα πλαστικά", "m": "τεμ.", "t": 0.2, "s": "ΠΑΠΑΦΙΛΙΠΠΟΥ"}, {"e": "Πιπεράκια", "m": "τεμ.", "t": 1.7, "s": "MINTIKKIS"}, {"e": "Πιπεριές Διάφορες", "m": "τεμ.", "t": 5.35, "s": "ALION"}, {"e": "Πιπεριές Πράσινες", "m": "κιλ.", "t": 4.0, "s": "ALION"}, {"e": "Πιπεριές Πράσινες (4kg)", "m": "τεμ.", "t": 5.35, "s": "ALION"}, {"e": "Πολτός Ντομάτας", "m": "τεμ.", "t": 1.0, "s": "LIDL"}, {"e": "Πορτοκαλάδα", "m": "τεμ.", "t": 2.1, "s": "MINTIKKIS"}, {"e": "Πούδρα Παιδική", "m": "τεμ.", "t": 3.5, "s": "MINTIKKIS"}, {"e": "Πόλιπιφ - zwan 2.85", "m": "τεμ.", "t": 2.85, "s": "MINTIKKIS"}, {"e": "Ρύζι Parboiled - κίτρινο", "m": "κιλ.", "t": 1.75, "s": "MINTIKKIS"}, {"e": "Ρύζι Καρολίνα", "m": "κιλ.", "t": 1.75, "s": "MINTIKKIS"}, {"e": "Ρύζι Μπασμάτι", "m": "κιλ.", "t": 1.75, "s": "MINTIKKIS"}, {"e": "Σακούλια Διάφανα Κουζίνας", "m": "τεμ.", "t": 1.1, "s": "MINTIKKIS"}, {"e": "Σακούλια Πορείας", "m": "τεμ.", "t": 2.0, "s": "MINTIKKIS"}, {"e": "Σακούλια Τουαλέττας", "m": "τεμ.", "t": 2.0, "s": "ΠΑΠΑΦΙΛΙΠΠΟΥ"}, {"e": "Σαντυγί", "m": "τεμ.", "t": 3.0, "s": "MINTIKKIS"}, {"e": "Σαπούνι Πιάτων", "m": "τεμ.", "t": 1.2, "s": "MINTIKKIS"}, {"e": "Σαπούνι Χεριών", "m": "τεμ.", "t": 1.3, "s": "MINTIKKIS"}, {"e": "Σκουπόξυλα", "m": "τεμ.", "t": 4.0, "s": "MINTIKKIS"}, {"e": "Σκούπα", "m": "τεμ.", "t": 1.5, "s": "MINTIKKIS"}, {"e": "Σκόνη Ρούχων - Σωληνάριο", "m": "τεμ.", "t": 3.5, "s": "MINTIKKIS"}, {"e": "Σπρέι Dettol", "m": "τεμ.", "t": 2.0, "s": "MINTIKKIS"}, {"e": "Στερεό Πετρέλαιο", "m": "τεμ.", "t": 0.9, "s": "MINTIKKIS"}, {"e": "Συρόπι Σοκολάτας", "m": "τεμ.", "t": 2.4, "s": "MINTIKKIS"}, {"e": "Σφουγγαράκια", "m": "τεμ.", "t": 1.5, "s": "ΠΑΠΑΦΙΛΙΠΠΟΥ"}, {"e": "Σφουγγαρίστρες", "m": "τεμ.", "t": 3.0, "s": "MINTIKKIS"}, {"e": "Τελλούι", "m": "τεμ.", "t": 2.0, "s": "MINTIKKIS"}, {"e": "Τελλούι Λεπτό INOX", "m": "τεμ.", "t": 2.6, "s": "MINTIKKIS"}, {"e": "Τονοσαλάτες Insaladisime", "m": "τεμ.", "t": 2.6, "s": "MINTIKKIS"}, {"e": "Τουρσί", "m": "τεμ.", "t": 1.4, "s": "MINTIKKIS"}, {"e": "Τρίμμα", "m": "τεμ.", "t": 3.15, "s": "MINTIKKIS"}, {"e": "Τριαντάφυλλο", "m": "τεμ.", "t": 2.1, "s": "MINTIKKIS"}, {"e": "Τσάι", "m": "τεμ.", "t": 1.7, "s": "MINTIKKIS"}, {"e": "Τυρί 70 pcsΧ6", "m": "κιλ.", "t": 6.0, "s": "MINTIKKIS"}, {"e": "Τόνοι 3αδες μεγάλο", "m": "τεμ.", "t": 5.6, "s": "MINTIKKIS"}, {"e": "Τόνος (μεγάλο κουτί)", "m": "τεμ.", "t": 10.25, "s": "MINTIKKIS"}, {"e": "Υγρό Επιφάνιας - Τάγκι", "m": "τεμ.", "t": 3.1, "s": "MINTIKKIS"}, {"e": "Υγρό Σφουγγαρισματος", "m": "τεμ.", "t": 4.0, "s": "ΠΑΠΑΦΙΛΙΠΠΟΥ"}, {"e": "Υγρό Τουαλέτας", "m": "τεμ.", "t": 1.5, "s": "MINTIKKIS"}, {"e": "Υγρό κουζίνας", "m": "τεμ.", "t": 2.55, "s": "MINTIKKIS"}, {"e": "Φάγνη", "m": "τεμ.", "t": 1.3, "s": "ΣΚΛΑΒΕΝΙΤ"}, {"e": "Φακές", "m": "κιλ.", "t": 2.5, "s": "MINTIKKIS"}, {"e": "Φαμόζο", "m": "τεμ.", "t": 1.9, "s": "MINTIKKIS"}, {"e": "Φιδέ", "m": "κιλ.", "t": 2.0, "s": "MINTIKKIS"}, {"e": "Φιλέτο ψάρι - Παγκάσιους", "m": "κιλ.", "t": 2.3, "s": "MINTIKKIS"}, {"e": "Φραντζολάκια Μεγεθος 3", "m": "τεμ.", "t": 0.6, "s": "MINTIKKIS"}, {"e": "Φραντζολάκια Μεγεθος 3ra", "m": "τεμ.", "t": 0.6, "s": "MINTIKKIS"}, {"e": "Φραντζολάκια Στρογγυλά", "m": "τεμ.", "t": 0.6, "s": "ALION"}, {"e": "Φρούτα Εποχής (200+)", "m": "τεμ.", "t": 20.0, "s": "ALION"}, {"e": "Φυστυκοβούτυρο", "m": "τεμ.", "t": 1.3, "s": "MINTIKKIS"}, {"e": "Φυστυκοβούτυρο Μεγάλο", "m": "τεμ.", "t": 3.5, "s": "MINTIKKIS"}, {"e": "Χαλεπιανά", "m": "τεμ.", "t": 3.0, "s": "MINTIKKIS"}, {"e": "Χαμ 70 pcs *5", "m": "κιλ.", "t": 4.55, "s": "MINTIKKIS"}, {"e": "Χαρτί Κουζίνας", "m": "τεμ.", "t": 6.15, "s": "MINTIKKIS"}, {"e": "Χαρτί Υγείας", "m": "τεμ.", "t": 0.18, "s": "MINTIKKIS"}, {"e": "Χαρτί Υγείας Βαθμοφόρων", "m": "τεμ.", "t": 3.35, "s": "MINTIKKIS"}, {"e": "Χλωρίνη", "m": "τεμ.", "t": 1.5, "s": "MINTIKKIS"}, {"e": "Χλωρίνη Τουαλέας τριάδα", "m": "τεμ.", "t": 5.3, "s": "MINTIKKIS"}, {"e": "Χοιρινό Σουβλάκι", "m": "κιλ.", "t": 5.5, "s": "MINTIKKIS"}, {"e": "Χοιρινός Κιμάς", "m": "κιλ.", "t": 5.8, "s": "ΣΚΛΑΒΕΝΙΤ"}, {"e": "Χυμός Ατομικός", "m": "τεμ.", "t": 0.45, "s": "MINTIKKIS"}, {"e": "Χυμός Ντομάτας 500γρ", "m": "τεμ.", "t": 0.62, "s": "LIDL"}, {"e": "Χωνάκια (21)", "m": "τεμ.", "t": 1.95, "s": "MINTIKKIS"}, {"e": "Ψαρονέφρι", "m": "κιλ.", "t": 6.0, "s": "MINTIKKIS"}, {"e": "Ψιλοκομμένη Ντομάτα 400γρ", "m": "τεμ.", "t": 0.65, "s": "LIDL"}, {"e": "Ψωμιά", "m": "τεμ.", "t": 2.5, "s": "ALION"}];
+
+</script>
+<script>
+/* price-catalog.js — συντηρούμενος τιμοκατάλογος (device-global, επαναχρησιμοποιήσιμος στις δράσεις).
+   → window.CampPrices. Seed από window.CampPriceSeed (ΟΠ 2025). Classic script, node-testable.
+   Κάθε είδος: { e:είδος, m:βασική μονάδα(κιλ./τεμ.), sell:"loose"|"pack",
+                 t:€/μονάδα(ζυγιστό), packSize:περιεχόμενο σε βασική μονάδα, packPrice:€/συσκευασία,
+                 packLabel:π.χ. "φραντζόλα"/"κασόνι 24", s:κατάστημα }.
+   ΣΗΜ.: κοινός/cloud κατάλογος = μελλοντικό βήμα· τώρα ζει τοπικά (localStorage). */
+(function (global) {
+  "use strict";
+  var KEY = "camp:pricecatalog";
+  function num(x){ var n=parseFloat(x); return isNaN(n)?0:n; }
+  function norm(s){ return String(s||"").trim().toLowerCase().replace(/\s+/g," "); }
+  function seed(){
+    return (global.CampPriceSeed || []).map(function(x){
+      return { e:x.e, m:x.m||"κιλ.", sell:"loose", t:num(x.t), packSize:0, packPrice:0, packLabel:"", s:x.s||"" };
+    });
+  }
+  function read(){
+    try{ var t=global.localStorage.getItem(KEY); if(t){ var a=JSON.parse(t); if(a&&a.length) return a; } }catch(e){}
+    var s=seed(); write(s); return s;
+  }
+  function write(a){ try{ global.localStorage.setItem(KEY, JSON.stringify(a)); }catch(e){} }
+  function all(){ return read(); }
+  function names(){ return read().map(function(x){ return x.e; }); }
+  function lookup(eidos){ var n=norm(eidos); var a=read(); for(var i=0;i<a.length;i++) if(norm(a[i].e)===n) return a[i]; return null; }
+  function upsert(entry){
+    if(!entry||!entry.e) return read();
+    var a=read(), n=norm(entry.e), i=-1;
+    for(var k=0;k<a.length;k++){ if(norm(a[k].e)===n){ i=k; break; } }
+    if(i>=0){ ["m","sell","t","packSize","packPrice","packLabel","s"].forEach(function(p){ if(entry[p]!=null&&entry[p]!=="") a[i][p]=entry[p]; }); }
+    else a.push({ e:entry.e, m:entry.m||"κιλ.", sell:entry.sell||"loose", t:num(entry.t), packSize:num(entry.packSize), packPrice:num(entry.packPrice), packLabel:entry.packLabel||"", s:entry.s||"" });
+    write(a); return a;
+  }
+  function remove(eidos){ var n=norm(eidos); write(read().filter(function(x){ return norm(x.e)!==n; })); }
+  function resetSeed(){ write(seed()); return read(); }
+
+  global.CampPrices = { all:all, names:names, lookup:lookup, upsert:upsert, remove:remove, resetSeed:resetSeed, KEY:KEY };
+  if (typeof module!=="undefined" && module.exports) module.exports = global.CampPrices;
+})(typeof window!=="undefined" ? window : this);
 
 </script>
 <script>
@@ -1440,7 +1524,7 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
 <script>
 (function(){
   "use strict";
-  var S=CampSchema, C=CampCatering, CL=CampClip, IO=CampIO;
+  var S=CampSchema, C=CampCatering, CL=CampClip, IO=CampIO, P=CampPrices;
   var phase=S.blankPhase();
   var inFrame=(function(){try{return window.self!==window.top;}catch(e){return true;}})();
   var AUTOSAVE="camp:catering:autosave";
@@ -1504,7 +1588,7 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
     $("#hc").textContent="≈ "+hc+" άτομα";
     $("#manualBox").classList.toggle("hide", (phase.people||[]).length>0);
     $("#manualTotal").value = phase.catering._manualTotal||"";
-    renderDiet(); renderPoso(); renderAgora(); renderKostos();
+    renderDiet(); renderPoso(); renderAgora(); renderAgores(); renderKostos();
     autosave();
   }
 
@@ -1619,7 +1703,7 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
     }
     return "<div class=line data-line=\""+l.id+"\">"+
       "<div class=lhead>"+
-        "<input data-f=eidos data-id=\""+l.id+"\" value=\""+esc(l.eidos)+"\" placeholder=\"Είδος (π.χ. Ψωμί)\">"+
+        "<input list=eidosList data-f=eidos data-id=\""+l.id+"\" value=\""+esc(l.eidos)+"\" placeholder=\"Είδος (π.χ. Ψωμί)\">"+
         "<select data-f=katigoria data-id=\""+l.id+"\">"+selOpts(C.CATEGORIES,l.katigoria)+"</select>"+
         "<button class=x data-del=\""+l.id+"\">✕</button>"+
       "</div>"+
@@ -1630,6 +1714,14 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
           "<div><label class=fld>Μονάδα</label><input list=units data-f=monada data-id=\""+l.id+"\" value=\""+esc(l.monada)+"\"></div>"+
           "<div><label class=fld>Τιμή/μονάδα (€, με ΦΠΑ)</label><input type=number step=any data-f=timiMonadas data-id=\""+l.id+"\" value=\""+esc(l.timiMonadas)+"\"></div>")+
         "<div><label class=fld>Προμηθευτής/πηγή</label><input list=suppliers data-f=supplier data-id=\""+l.id+"\" value=\""+esc(l.supplier||"")+"\" placeholder=\"π.χ. ταβέρνα / Supermarket\"></div>"+
+        (mode!=="allowance"?(
+          "<div><label class=fld>Πώληση</label><select data-f=sell data-id=\""+l.id+"\"><option value=loose"+((l.sell||"loose")==="loose"?" selected":"")+">Ζυγιστό (€/μον.)</option><option value=pack"+(l.sell==="pack"?" selected":"")+">Σε συσκευασίες</option></select></div>"+
+          (l.sell==="pack"?(
+            "<div><label class=fld>Περιεχ. συσκ. ("+esc(l.monada||"")+")</label><input type=number step=any data-f=packSize data-id=\""+l.id+"\" value=\""+esc(l.packSize)+"\" placeholder=\"π.χ. 5\"></div>"+
+            "<div><label class=fld>Τιμή/συσκ. (€)</label><input type=number step=any data-f=packPrice data-id=\""+l.id+"\" value=\""+esc(l.packPrice)+"\"></div>"+
+            "<div><label class=fld>Ετικέτα συσκ.</label><input data-f=packLabel data-id=\""+l.id+"\" value=\""+esc(l.packLabel||"")+"\" placeholder=\"φραντζόλα/σακί/κασόνι\"></div>"
+          ):"")
+        ):"")+
         "<div><label class=fld>Γεύμα (σύνδεση)</label><select data-f=mealslot data-id=\""+l.id+"\">"+slotOpts(l)+"</select></div>"+
         "<div><label class=fld>Δόση αγοράς</label><select data-f=dosi data-id=\""+l.id+"\">"+dosiOpts(l.dosi)+"</select></div>"+
         "<div><label class=fld>Ημ. αγοράς</label><input type=date data-f=dosiDate data-id=\""+l.id+"\" value=\""+esc(l.dosiDate)+"\"></div>"+
@@ -1736,19 +1828,38 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
       phase.meta.dates=S.mergeDates({start:st,end:en}); renderAll(); return; }
     if(el.id==="onoma"){ phase.meta.onoma=el.value; $("#ctx").textContent="δράση: "+(el.value||"(χωρίς όνομα)"); autosave(); return; }
     if(el.id==="manualTotal"){ phase.catering._manualTotal=el.value; renderAll(); return; }
+    if(el.hasAttribute&&el.hasAttribute("data-b")){
+      var bid=el.getAttribute("data-id"), bl=lineById(bid); if(!bl)return;
+      var bf=el.getAttribute("data-b");
+      if(bf==="bought"){ bl.bought=el.checked; }
+      else { bl[bf]=el.value;
+        if(bf==="actualPrice" && bl.eidos && C.num(el.value)>0){
+          if((bl.sell||"loose")==="pack") P.upsert({e:bl.eidos,m:bl.monada,sell:"pack",packSize:bl.packSize,packPrice:C.num(el.value),packLabel:bl.packLabel,s:bl.supplier});
+          else P.upsert({e:bl.eidos,m:bl.monada,sell:"loose",t:C.num(el.value),s:bl.supplier});
+        }
+      }
+      updateBuyCost(bl); refreshStoreTot(); autosave(); return;
+    }
     if(id){ var l=lineById(id); if(!l)return; var f=el.getAttribute("data-f");
       if(f==="meridesAuto"){ l.meridesAuto=el.checked; renderPoso(); refreshTotalsOnly(); autosave(); return; }
       if(f==="paid"){ l.paid=el.checked; autosave(); return; }
       if(f==="mealslot"){ var pr=el.value.split("|"); l.mealDate=pr[0]||""; l.mealKey=pr[1]||""; renderPoso(); refreshTotalsOnly(); autosave(); return; }
       l[f]=el.value;
-      if(f==="mode"){ renderPoso(); }                               // αλλάζουν τα πεδία του mode
+      if(f==="packSize"||f==="packPrice"){ var ps=C.num(l.packSize),pp=C.num(l.packPrice); if(ps>0&&pp>0) l.timiMonadas=Math.round(pp/ps*1000)/1000; }
+      if(f==="mode"||f==="sell"){ renderPoso(); }                   // αλλάζουν τα ορατά πεδία
       else updateLineLive(l);                                       // ζωντανά κόστος/φόρμουλα (κρατά focus)
       refreshTotalsOnly(); autosave();
     }
   });
   document.addEventListener("change",function(e){
     var el=e.target, f=el.getAttribute&&el.getAttribute("data-f");
-    if(f==="mode"||f==="dosi"||f==="mealslot"||f==="katigoria"||f==="supplier"||f==="paid"||f==="actual"){ renderAgora(); renderKostos(); }
+    if(el.id==="storePick"){ renderAgores(); return; }
+    if(f==="eidos"){ var l2=lineById(el.getAttribute("data-id")); if(l2){ var cat=P.lookup(el.value);
+      if(cat && !C.num(l2.timiMonadas) && !C.num(l2.packPrice)){ l2.monada=l2.monada||cat.m||"κιλ."; l2.sell=cat.sell||"loose";
+        if(cat.sell==="pack"){ l2.packSize=cat.packSize; l2.packPrice=cat.packPrice; l2.packLabel=cat.packLabel; l2.timiMonadas=cat.packSize?Math.round(cat.packPrice/cat.packSize*1000)/1000:0; }
+        else { l2.timiMonadas=cat.t; }
+        renderPoso(); refreshTotalsOnly(); autosave(); flash("Τιμή από κατάλογο ✓"); } } }
+    if(f==="mode"||f==="dosi"||f==="mealslot"||f==="katigoria"||f==="supplier"||f==="paid"||f==="actual"||f==="sell"){ renderAgora(); renderKostos(); }
   });
   function updateLineLive(l){
     var node=document.querySelector('.line[data-line="'+l.id+'"]'); if(!node)return;
@@ -1797,6 +1908,13 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
     if(t.id==="copyAll"){ copyShopping(null); return; }
     if(t.id==="copyMatrix"){ copyMatrix(); return; }
     if(t.id==="copyBudget"){ copyBudget(); return; }
+    var skb=t.closest&&t.closest("[data-skip]");
+    if(skb){ var sl=lineById(skb.getAttribute("data-skip")); if(sl){ sl.skipped=!sl.skipped; if(sl.skipped) sl.bought=false; } renderAgores(); autosave(); return; }
+    if(t.id==="addExtra"){ var stx=t.getAttribute("data-store")||""; var nm=(window.prompt("Έξτρα είδος (όνομα):")||"").trim(); if(!nm)return;
+      var cat=P.lookup(nm); var nl=C.blankLine({eidos:nm,supplier:(stx==="—"?"":stx),mode:"flat",extra:true,bought:true,
+        monada:(cat?cat.m:"τεμ."), sell:(cat?cat.sell:"loose"), timiMonadas:(cat&&cat.sell!=="pack"?cat.t:0),
+        packSize:(cat?cat.packSize:0), packPrice:(cat?cat.packPrice:0), packLabel:(cat?cat.packLabel:"")});
+      phase.catering.posotologio.push(nl); renderAgores(); autosave(); return; }
   });
 
   function copyMatrix(){
@@ -1872,12 +1990,43 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
     ms.push({key:key,label:label}); $("#addMealSel").value=""; renderAll(); switchTab("diet");
   }
 
+  function renderAgores(){
+    var sg=C.storeGroups(phase), stores=sg.map(function(g){return g.store;});
+    var sel=$("#storePick"), cur=sel.value;
+    sel.innerHTML=stores.length?stores.map(function(s){return "<option value=\""+esc(s)+"\">"+esc(s==="—"?"— χωρίς κατάστημα —":s)+"</option>";}).join(""):"<option value=''>— καμία —</option>";
+    if(cur&&stores.indexOf(cur)>=0) sel.value=cur;
+    var store=sel.value||stores[0]||"", g=sg.filter(function(x){return x.store===store;})[0];
+    if(!g){ $("#agores").innerHTML="<div class=hint>Δεν υπάρχουν είδη — πρόσθεσε στο ποσοτολόγιο ή βάλε προμηθευτή.</div>"; $("#storeTot").textContent="—"; return; }
+    $("#agores").innerHTML=g.items.map(function(it){
+      var l=it.line, bp=it.buy, id=l.id;
+      var need=bp.sell==="pack"?("<b>"+bp.packs+"</b> × "+esc(bp.label)+" <span class=hint>(χρειάζεσαι "+C.fmtNum(bp.baseNeed)+" "+esc(l.monada||"")+")</span>"):(C.fmtNum(bp.baseNeed)+" "+esc(l.monada||"")+" <span class=hint>(ζυγιστό)</span>");
+      var aQty=(l.actualQty||l.actualQty===0)&&l.actualQty!==0?l.actualQty:(bp.sell==="pack"?bp.packs:bp.baseNeed);
+      if(!l.actualQty) aQty=bp.sell==="pack"?bp.packs:bp.baseNeed;
+      var aPrice=l.actualPrice||(bp.sell==="pack"?bp.perPack:(l.timiMonadas||""));
+      return "<div class=\"line"+(l.skipped?" derived":"")+"\" data-buy=\""+id+"\">"+
+        "<div class=lhead style=\"grid-template-columns:1fr auto auto\"><div>"+esc(l.eidos||"(είδος)")+" · "+need+"</div>"+
+          "<label class=auto><input type=checkbox data-b=bought data-id=\""+id+"\""+(l.bought?" checked":"")+(l.skipped?" disabled":"")+"> πάρθηκε</label>"+
+          "<button class=x data-skip=\""+id+"\" title=\"Δεν πάρθηκε / επαναφορά\">"+(l.skipped?"↺":"✕")+"</button></div>"+
+        (l.skipped?"<div class=hint style=\"margin-top:6px\">— δεν πάρθηκε —</div>":
+        "<div class=lgrid style=\"margin-top:6px\">"+
+          "<div><label class=fld>Πραγμ. ποσότητα ("+(bp.sell==="pack"?"συσκ.":esc(l.monada||""))+")</label><input type=number step=any data-b=actualQty data-id=\""+id+"\" value=\""+esc(aQty)+"\"></div>"+
+          "<div><label class=fld>Πραγμ. τιμή ("+(bp.sell==="pack"?"€/συσκ.":"€/"+esc(l.monada||"μον."))+")</label><input type=number step=any data-b=actualPrice data-id=\""+id+"\" value=\""+esc(aPrice)+"\"></div>"+
+          "<div><label class=fld>Πραγμ. κόστος</label><div class=formula data-role=buycost>"+eur(C.itemActual(phase,l))+"</div></div>"+
+        "</div>")+"</div>";
+    }).join("")+"<button class=add id=addExtra data-store=\""+esc(store)+"\">＋ έξτρα είδος (εκτός λίστας)</button>";
+    var bt=g.items.reduce(function(s,it){return s+(C.itemBought(it.line)?C.itemActual(phase,it.line):0);},0);
+    var eb=g.items.reduce(function(s,it){return s+(it.line.skipped?0:it.buy.planCost);},0);
+    $("#storeTot").textContent="πληρωμένα "+eur(bt)+" / εκτ. "+eur(eb);
+  }
+  function updateBuyCost(l){ var n=document.querySelector('.line[data-buy="'+l.id+'"] [data-role="buycost"]'); if(n) n.textContent=eur(C.itemActual(phase,l)); }
+  function refreshStoreTot(){ var store=$("#storePick").value; var g=C.storeGroups(phase).filter(function(x){return x.store===store;})[0]; if(g){ var bt=g.items.reduce(function(s,it){return s+(C.itemBought(it.line)?C.itemActual(phase,it.line):0);},0); var eb=g.items.reduce(function(s,it){return s+(it.line.skipped?0:it.buy.planCost);},0); $("#storeTot").textContent="πληρωμένα "+eur(bt)+" / εκτ. "+eur(eb); } }
+
   function switchTab(tab){
-    ["diet","poso","agora","kostos"].forEach(function(k){
+    ["diet","poso","agora","agores","kostos"].forEach(function(k){
       $("#tab-"+k).classList.toggle("hide",k!==tab);
       var el=document.querySelector('.tab[data-tab="'+k+'"]'); if(el) el.classList.toggle("on",k===tab);
     });
-    if(tab==="agora") renderAgora(); else if(tab==="kostos") renderKostos();   // φρέσκες προβολές
+    if(tab==="agora") renderAgora(); else if(tab==="kostos") renderKostos(); else if(tab==="agores") renderAgores();   // φρέσκες προβολές
   }
 
   function copyShopping(dosi){
@@ -1989,6 +2138,9 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
   var ds=document.createElement("datalist"); ds.id="suppliers";
   ds.innerHTML=C.SUPPLIERS.map(function(u){return "<option value=\""+esc(u)+"\">";}).join("");
   document.body.appendChild(ds);
+  var el2=document.createElement("datalist"); el2.id="eidosList";
+  try{ el2.innerHTML=P.names().map(function(u){return "<option value=\""+esc(u)+"\">";}).join(""); }catch(e){}
+  document.body.appendChild(el2);
 
   /* extra-meal picker options */
   $("#addMealSel").innerHTML="<option value=''>— επίλεξε —</option>"+
