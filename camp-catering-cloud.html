@@ -133,6 +133,7 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
     <select id="openDrasi" class="hide" style="max-width:190px" title="Δράσεις (cloud)"></select>
     <button class="btn small" id="save">💾 Αποθήκευση</button>
     <button class="btn ghost small" id="reload" title="Ανανέωση από την κοινή βάση">🔄 Ανανέωση</button>
+    <button class="btn ghost small" id="expXlsx" title="Excel με 2 φύλλα: ΔΙΑΙΤΟΛΟΓΙΟ + ΠΟΣΟΤΟΛΟΓΙΟ">⬇︎ Excel (2 φύλλα)</button>
     <button class="btn ghost small" id="exp">⬇︎ Αρχείο (.json)</button>
     <button class="btn ghost small" id="imp">📂 Άνοιγμα αρχείου</button>
     <input type="file" id="fileInput" accept="application/json" class="hide">
@@ -1868,6 +1869,55 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
     a.download="τροφοδοσία-"+nm+"-"+today+".json";
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){URL.revokeObjectURL(a.href);},1500);
     flash("Κατέβηκε: τροφοδοσία-"+nm+"-"+today+".json");
+  });
+
+  /* ---------- Export .xlsx (2 φύλλα: ΔΙΑΙΤΟΛΟΓΙΟ + ΠΟΣΟΤΟΛΟΓΙΟ) ---------- */
+  function ensureXLSX(){
+    if(window.XLSX) return Promise.resolve(window.XLSX);
+    return new Promise(function(res,rej){
+      var s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      s.onload=function(){ window.XLSX?res(window.XLSX):rej(new Error("no xlsx")); };
+      s.onerror=function(){ rej(new Error("offline")); };
+      document.head.appendChild(s);
+    });
+  }
+  function diaitRows(){
+    var days=C.cateringDays(phase), ms=C.meals(phase);
+    var rows=[["ΔΙΑΙΤΟΛΟΓΙΟ ΔΡΑΣΗΣ"]];
+    if(!days.length) return rows.concat([["(χωρίς ημερομηνίες)"]]);
+    rows.push(["ΗΜΕΡΑ"].concat(days.map(function(d){return dmy(d)+" "+dow(d);})));
+    ms.forEach(function(m){
+      rows.push([m.label].concat(days.map(function(d){
+        var s=C.slot(phase,d,m.key)||{}; if(s.off) return "—"; if(s.merged) return "(μαζί με πάνω)";
+        var t=s.text||""; if(s.subs&&s.subs.length) t+=(t?" · ":"")+s.subs.map(function(x){return x.label+": "+(x.text||"");}).join(" · ");
+        return t;
+      })));
+    });
+    return rows;
+  }
+  function posoXlsxRows(){
+    var m=C.posotologioMatrix(phase);
+    var dayLabels=m.days.map(function(d,i){return (i+1)+"η";});
+    var rows=[["","Α/Α","ΕΙΔΟΣ"].concat(dayLabels,["Ποσ/μερίδα","Μονάδα","Μερίδες","Ποσότητα","Τιμή/μον (ΦΠΑ μέσα)","Αξία"])];
+    rows.push(["","","Κατασκηνωτές"].concat(m.headcounts.map(function(h){return h||"";}),["","","","","",""]));
+    m.rows.forEach(function(r){
+      var facs=m.days.map(function(d){return r.factors[d]?r.factors[d]:"";});
+      rows.push(["",r.idx,r.eidos].concat(facs,[r.Q||"",r.monada,r.merides,r.posotita,r.timi,r.aksia]));
+    });
+    rows.push(["","","ΣΥΝΟΛΟ"].concat(m.days.map(function(){return "";}),["","","","","",m.total]));
+    return rows;
+  }
+  $("#expXlsx").addEventListener("click",function(){
+    var btn=this, old=btn.textContent; btn.textContent="…";
+    ensureXLSX().then(function(XLSX){
+      var wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(diaitRows()), "ΔΙΑΙΤΟΛΟΓΙΟ");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(posoXlsxRows()), "ΠΟΣΟΤΟΛΟΓΙΟ");
+      var nm=(phase.meta.onoma||"δράση").replace(/[^\wΑ-Ωα-ωά-ώ0-9-]+/g,"_");
+      XLSX.writeFile(wb, "τροφοδοσία-"+nm+"-"+new Date().toISOString().slice(0,10)+".xlsx");
+      btn.textContent=old; flash("Κατέβηκε Excel: ΔΙΑΙΤΟΛΟΓΙΟ + ΠΟΣΟΤΟΛΟΓΙΟ");
+    }).catch(function(){ btn.textContent=old; flash("Χρειάζεται σύνδεση για Excel — αλλιώς χρησιμοποίησε τα κουμπιά Copy"); });
   });
 
   /* units + suppliers datalists */
