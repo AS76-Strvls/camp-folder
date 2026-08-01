@@ -1884,15 +1884,17 @@ input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6
     return rows;
   }
   function posoXlsxRows(){
+    // Layout όπως το master ΠΟΣΟΤΟΛΟΓΙΟ: κενή στήλη A, α/α στο B, ΕΙΔΟΣ στο C, μέρες, παράγωγα, Αξία τελευταία.
+    // (Έτσι το διαβάζει και ο parser του Απολογισμού: row[1]=α/α αριθμός, row[2]=ΕΙΔΟΣ, Αξία = τελευταίος αριθμός.)
     var m=C.posotologioMatrix(phase);
     var dayLabels=m.days.map(function(d,i){return (i+1)+"η";});
-    var rows=[["Α/Α","ΕΙΔΟΣ"].concat(dayLabels,["Ποσ/μερίδα","Μονάδα","Μερίδες","Ποσότητα","Τιμή/μον (ΦΠΑ μέσα)","Αξία"])];
-    rows.push(["","Κατασκηνωτές"].concat(m.headcounts.map(function(h){return h||"";}),["","","","","",""]));
+    var rows=[["","Α/Α","ΕΙΔΟΣ"].concat(dayLabels,["Ποσ/μερίδα","Μονάδα","Μερίδες","Ποσότητα","Τιμή/μον (ΦΠΑ μέσα)","Αξία"])];
+    rows.push(["","","Κατασκηνωτές"].concat(m.headcounts.map(function(h){return h||"";}),["","","","","",""]));
     m.rows.forEach(function(r){
       var facs=m.days.map(function(d){return r.factors[d]?r.factors[d]:"";});
-      rows.push([r.idx,r.eidos].concat(facs,[r.Q||"",r.monada,r.merides,r.posotita,r.timi,r.aksia]));
+      rows.push(["",r.idx,r.eidos].concat(facs,[r.Q||"",r.monada,r.merides,r.posotita,r.timi,r.aksia]));
     });
-    rows.push(["","ΣΥΝΟΛΟ"].concat(m.days.map(function(){return "";}),["","","","","",m.total]));
+    rows.push(["","","ΣΥΝΟΛΟ"].concat(m.days.map(function(){return "";}),["","","","","",m.total]));
     return rows;
   }
   $("#expXlsx").addEventListener("click",function(){
